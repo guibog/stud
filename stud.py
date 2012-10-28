@@ -14,7 +14,6 @@ from docutils.parsers.rst import directives
 from sphinx.util.compat import Directive
 
 isa = isinstance
-_id_prefix = 'std:st-'
 
 class StudDirective(Directive):
     required_arguments = 1
@@ -50,7 +49,7 @@ def _load_source_doctree(doctreedir, source, fromdocname):
     except IOError:
         return WrongSourceDoctree()
 
-def _transclude(tree, source, from_id, to_id, info):
+def _transclude(tree, source, from_id, to_id, id_prefix, info):
     if from_id not in tree.ids:
         return None
     target = tree.ids[from_id]
@@ -58,10 +57,11 @@ def _transclude(tree, source, from_id, to_id, info):
     info("stud: %s %s found target node" % (source, from_id))
     for sibling in target.traverse(include_self=True, siblings=True,
                                    descend=False, ascend=True):
-        if _is_target(sibling, to_id) and not _is_target(sibling, from_id):
+        if (_is_target(sibling, to_id, id_prefix)
+                and not _is_target(sibling, from_id, id_prefix)):
             info("stub: found next target, breaking")
             break
-        pruned_sibling, pruned = _prune_next(sibling.deepcopy(), to_id)
+        pruned_sibling, pruned = _prune_next(sibling.deepcopy(), to_id, id_prefix)
         contents.append(pruned_sibling)
         if pruned:
             break
@@ -69,25 +69,25 @@ def _transclude(tree, source, from_id, to_id, info):
         info("stud: reached end of doctree")
     return contents
 
-def _prune_next(tree, to_id):
+def _prune_next(tree, to_id, id_prefix):
     new_children = []
     pruned = False
     for child in tree.children:
-        if _is_target(child, to_id):
+        if _is_target(child, to_id, id_prefix):
             pruned = True
             break
-        pruned_child, pruned = _prune_next(child, to_id)
+        pruned_child, pruned = _prune_next(child, to_id, id_prefix)
         new_children.append(pruned_child)
     tree.children = new_children
     return tree, pruned
 
-def _is_target(node, to_id):
+def _is_target(node, to_id, id_prefix):
     if not isa(node, nodes.Element):
         return False
     if to_id:
         return to_id in node.attributes['ids']
     else:
-        return any(i.startswith(_id_prefix) for i in node.attributes['ids'])
+        return any(i.startswith(id_prefix) for i in node.attributes['ids'])
 
 def process_stud(app, doctree, fromdocname):
     env = app.builder.env
@@ -95,9 +95,17 @@ def process_stud(app, doctree, fromdocname):
     info = doctree.reporter.info
     warn = doctree.reporter.warning
     doctrees = {}
+    if app.config.stud_allow_internal_targets:
+        id_prefix = app.config.stud_internal_targets_prefix
+        use_lower = True
+    else:
+        id_prefix = 'std:st-'
+        use_lower = False
     for node in doctree.traverse(stud):
         source = node.attributes['source']
-        target_id = _id_prefix + node.attributes['target_id']
+        target_id = id_prefix + node.attributes['target_id']
+        if use_lower:
+            target_id = target_id.lower()
         if node.attributes['debug']:
             doctree.reporter.report_level = doctree.reporter.INFO_LEVEL
         else:
@@ -110,7 +118,7 @@ def process_stud(app, doctree, fromdocname):
             warn(err, line=node.line)
             replacement = nodes.problematic(err, err)
         else:
-            new_content = _transclude(doctrees[source], source, target_id, None, info)
+            new_content = _transclude(doctrees[source], source, target_id, None, id_prefix, info)
             if new_content is None:
                 err = "Unable to find target %s in source %s" % (target_id, source)
                 warn(err, line=node.line)
@@ -125,7 +133,8 @@ def process_stud(app, doctree, fromdocname):
     doctree.reporter.report_level = _keep_report_level
 
 def setup(app):
-    app.add_config_value('stud_debug', False, False)
+    app.add_config_value('stud_allow_internal_targets', False, False)
+    app.add_config_value('stud_internal_targets_prefix', 'st-', False)
     app.add_node(stud)
     app.add_crossref_type('st', 'st', 'single: %s', nodes.generated)
     app.add_directive('stud', StudDirective)
